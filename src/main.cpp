@@ -124,7 +124,9 @@ void TaskReadBMP(void *pvParameters);
 #define DEVICE_ID "2A"
 
 // Add near top with other defines
-#define FIREBASE_UPDATE_INTERVAL 60000 // 1 minute in milliseconds
+#define FIREBASE_UPDATE_INTERVAL 60000  // 1 minute in milliseconds
+#define FIREBASE_HISTORY_INTERVAL 60000 // 1 minute in milliseconds
+#define FIREBASE_LATEST_INTERVAL 5000   // 5 seconds in milliseconds
 
 void setup()
 {
@@ -706,14 +708,85 @@ void TaskReadSensors(void *pvParameters)
 
 void TaskSendFirebase(void *pvParameters)
 {
+  unsigned long lastHistoryUpdate = 0;
+  unsigned long lastLatestUpdate = 0;
+
   while (true)
   {
+    unsigned long currentMillis = millis();
+
     if (xSemaphoreTake(xMutex, pdMS_TO_TICKS(200)) == pdTRUE)
     {
-      sendToRealtimeDB(temperature, humidity, velocity_kmh, rainfall, pressure_hPa, uvIndex);
+      // Create JSON with current sensor data
+      json.clear();
+      json.add("temperature", temperature);
+      json.add("humidity", humidity);
+      json.add("windSpeed_kmph", velocity_kmh);
+      json.add("rainfall_mm", rainfall);
+      json.add("pressure_hPa", pressure_hPa);
+      json.add("uvIndex", uvIndex);
+      json.add("altitude", altitude);
+
+      // Get current timestamp
+      char fullTimestamp[20];
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo))
+      {
+        strftime(fullTimestamp, sizeof(fullTimestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      }
+
+      json.add("timestamp", fullTimestamp);
+
+      // Get weather condition
+      WeatherCondition weather = fuzzyLogic(temperature, humidity, velocity_kmh, rainfall, pressure_hPa, uvIndex);
+      json.add("weatherCondition", weather.condition);
+      json.add("weatherCertainty", weather.certainty);
+
+      // Update latest reading more frequently
+      if (currentMillis - lastLatestUpdate >= FIREBASE_LATEST_INTERVAL)
+      {
+        String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
+        String latestPath = basePath + "/latest_reading";
+
+        if (Firebase.RTDB.setJSON(&fbdo, latestPath.c_str(), &json))
+        {
+          Serial.println("Latest reading update successful");
+        }
+        else
+        {
+          Serial.println("Latest reading update failed");
+          Serial.println(fbdo.errorReason());
+        }
+
+        lastLatestUpdate = currentMillis;
+      }
+
+      // Update history every minute
+      if (currentMillis - lastHistoryUpdate >= FIREBASE_HISTORY_INTERVAL)
+      {
+        String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
+        String formattedTime = String(fullTimestamp);
+        formattedTime.replace(" ", "_");
+        formattedTime.replace(":", "-");
+        String historyPath = basePath + "/history/" + formattedTime;
+
+        if (Firebase.RTDB.setJSON(&fbdo, historyPath.c_str(), &json))
+        {
+          Serial.println("History data saved successfully");
+        }
+        else
+        {
+          Serial.println("History data save failed");
+          Serial.println(fbdo.errorReason());
+        }
+
+        lastHistoryUpdate = currentMillis;
+      }
+
       xSemaphoreGive(xMutex);
     }
-    vTaskDelay(pdMS_TO_TICKS(FIREBASE_UPDATE_INTERVAL)); // Changed from 5000 to 60000 ms
+
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
   }
 }
 
