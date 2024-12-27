@@ -128,6 +128,13 @@ void TaskReadBMP(void *pvParameters);
 #define FIREBASE_HISTORY_INTERVAL 60000 // 1 minute in milliseconds
 #define FIREBASE_LATEST_INTERVAL 5000   // 5 seconds in milliseconds
 
+// Add this near the top with other defines
+#define DEBUG_INTERVAL 10000 // Increase debug interval to 10 seconds
+
+// Add these with other global variables
+unsigned long lastFuzzyDebugTime = 0;
+const unsigned long FUZZY_DEBUG_INTERVAL = 5000; // Print every 5 seconds
+
 void setup()
 {
   Serial.begin(115200);
@@ -380,29 +387,6 @@ float calculateMembership(float value, float start, float peak, float end)
   return (value < peak) ? (value - start) / (peak - start) : (end - value) / (end - peak);
 }
 
-float calculateTriangularMembership(float value, float a, float b, float c)
-{
-  if (value <= a || value >= c)
-    return 0;
-  if (value == b)
-    return 1;
-  if (value < b)
-    return (value - a) / (b - a);
-  return (c - value) / (c - b);
-}
-
-// Fungsi untuk menghitung derajat keanggotaan trapesium
-float calculateTrapezoidalMembership(float value, float a, float b, float c, float d)
-{
-  if (value <= a || value >= d)
-    return 0;
-  if (value >= b && value <= c)
-    return 1;
-  if (value < b)
-    return (value - a) / (b - a);
-  return (d - value) / (d - c);
-}
-
 struct WeatherCondition
 {
   String condition;
@@ -411,101 +395,109 @@ struct WeatherCondition
 
 WeatherCondition fuzzyLogic(float temp, float hum, float windSpeed, float rainfall, float pressure, float uvIndex)
 {
-  // Temperature membership
-  float tempDingin = calculateTriangularMembership(temp, 15, 20, 25);
-  float tempNormal = calculateTriangularMembership(temp, 20, 25, 30);
-  float tempPanas = calculateTrapezoidalMembership(temp, 25, 30, 35, 40);
+  // Temperature membership functions (°C)
+  float tempDingin = (temp <= 20) ? 1 : (temp <= 25) ? (25 - temp) / 5
+                                                     : 0;
+  float tempNormal = (temp <= 20) ? 0 : (temp <= 25) ? (temp - 20) / 5
+                                    : (temp <= 30)   ? (30 - temp) / 5
+                                                     : 0;
+  float tempPanas = (temp <= 25) ? 0 : (temp <= 30) ? (temp - 25) / 5
+                                   : (temp <= 35)   ? 1
+                                                    : 0;
 
-  // Humidity membership
-  float humKering = calculateTriangularMembership(hum, 0, 30, 50);
-  float humNormal = calculateTriangularMembership(hum, 30, 50, 70);
-  float humLembab = calculateTrapezoidalMembership(hum, 50, 70, 80, 100);
+  // Humidity membership functions (%)
+  float humKering = (hum <= 30) ? 1 : (hum <= 50) ? (50 - hum) / 20
+                                                  : 0;
+  float humNormal = (hum <= 30) ? 0 : (hum <= 50) ? (hum - 30) / 20
+                                  : (hum <= 70)   ? (70 - hum) / 20
+                                                  : 0;
+  float humLembab = (hum <= 50) ? 0 : (hum <= 70) ? (hum - 50) / 20
+                                                  : 1;
 
-  // Wind Speed membership (in km/h)
-  float windTenang = calculateTriangularMembership(windSpeed, 0, 5, 15);
-  float windSedang = calculateTriangularMembership(windSpeed, 10, 20, 30);
-  float windKencang = calculateTrapezoidalMembership(windSpeed, 25, 35, 50, 60);
+  // Wind Speed membership functions (km/h)
+  float windTenang = (windSpeed <= 5) ? 1 : (windSpeed <= 15) ? (15 - windSpeed) / 10
+                                                              : 0;
+  float windSedang = (windSpeed <= 5) ? 0 : (windSpeed <= 15) ? (windSpeed - 5) / 10
+                                        : (windSpeed <= 25)   ? (25 - windSpeed) / 10
+                                                              : 0;
+  float windKencang = (windSpeed <= 15) ? 0 : (windSpeed <= 25) ? (windSpeed - 15) / 10
+                                                                : 1;
 
-  // Rainfall membership (in mm)
-  float rainTidak = calculateTriangularMembership(rainfall, 0, 0, 0.5);
-  float rainRingan = calculateTriangularMembership(rainfall, 0.3, 2, 5);
-  float rainSedang = calculateTriangularMembership(rainfall, 4, 10, 20);
-  float rainLebat = calculateTrapezoidalMembership(rainfall, 15, 25, 50, 100);
+  // Rainfall membership functions (mm)
+  float rainTidak = (rainfall <= 0.5) ? 1 : (rainfall <= 2) ? (2 - rainfall) / 1.5
+                                                            : 0;
+  float rainRingan = (rainfall <= 0.5) ? 0 : (rainfall <= 2) ? (rainfall - 0.5) / 1.5
+                                         : (rainfall <= 5)   ? (5 - rainfall) / 3
+                                                             : 0;
+  float rainSedang = (rainfall <= 2) ? 0 : (rainfall <= 5) ? (rainfall - 2) / 3
+                                       : (rainfall <= 10)  ? (10 - rainfall) / 5
+                                                           : 0;
+  float rainLebat = (rainfall <= 5) ? 0 : (rainfall <= 10) ? (rainfall - 5) / 5
+                                                           : 1;
 
-  // Pressure membership (in hPa, converted from Pa)
-  float pressureHPa = pressure / 100.0; // Convert Pa to hPa
-  float pressureLow = calculateTriangularMembership(pressureHPa, 980, 1000, 1013);
-  float pressureNormal = calculateTriangularMembership(pressureHPa, 1010, 1013, 1016);
-  float pressureHigh = calculateTrapezoidalMembership(pressureHPa, 1015, 1020, 1030, 1040);
+  // Add UV Index membership functions
+  float uvLow = (uvIndex <= 2) ? 1 : (uvIndex <= 3) ? (3 - uvIndex)
+                                                    : 0;
+  float uvMedium = (uvIndex <= 2) ? 0 : (uvIndex <= 3) ? (uvIndex - 2)
+                                    : (uvIndex <= 6)   ? (6 - uvIndex) / 3
+                                                       : 0;
+  float uvHigh = (uvIndex <= 5) ? 0 : (uvIndex <= 7) ? (uvIndex - 5) / 2
+                                                     : 1;
 
-  // UV Index membership
-  float uvRendah = calculateTriangularMembership(uvIndex, 0, 2, 5);
-  float uvSedang = calculateTriangularMembership(uvIndex, 3, 6, 8);
-  float uvTinggi = calculateTrapezoidalMembership(uvIndex, 6, 8, 10, 12);
+  // Rules evaluation with weights - modified to include UV index
+  std::vector<std::pair<float, String>> conditions;
 
-  // Rules definition with certainty values
-  struct Rule
-  {
-    float strength;
-    String condition;
-  };
+  // Rule untuk Cerah (weight: 1.0)
+  conditions.push_back({1.0 * min({tempNormal, humNormal, windTenang, rainTidak, uvHigh}),
+                        "Cerah"});
 
-  std::vector<Rule> rules;
+  // Rule untuk Berawan (weight: 0.9) - increased weight and modified conditions
+  conditions.push_back({0.9 * min({tempNormal, humNormal, windTenang, uvLow}),
+                        "Berawan"});
 
-  // Add rules with their conditions
-  rules.push_back({min({tempNormal, humNormal, windTenang, rainTidak, pressureNormal, uvRendah}),
-                   "Cerah"});
+  // Rule untuk Hujan Ringan (weight: 0.9)
+  conditions.push_back({0.9 * min({humLembab, rainRingan, uvLow}),
+                        "Hujan Ringan"});
 
-  rules.push_back({min({tempNormal, humNormal, windTenang, rainTidak, pressureLow, uvRendah}),
-                   "Berawan"});
+  // Rule untuk Hujan Sedang (weight: 0.9)
+  conditions.push_back({0.9 * min({humLembab, rainSedang, uvLow}),
+                        "Hujan Sedang"});
 
-  rules.push_back({min({tempDingin, humLembab, windSedang, rainRingan, pressureLow}),
-                   "Hujan Ringan"});
+  // Rule untuk Hujan Lebat (weight: 1.0)
+  conditions.push_back({1.0 * min({humLembab, windKencang, rainLebat, uvLow}),
+                        "Hujan Lebat"});
 
-  rules.push_back({min({tempDingin, humLembab, windSedang, rainSedang, pressureLow}),
-                   "Hujan Sedang"});
+  // Rule untuk Panas (weight: 0.8)
+  conditions.push_back({0.8 * min({tempPanas, humKering, uvHigh}),
+                        "Panas"});
 
-  rules.push_back({min({tempDingin, humLembab, windKencang, rainLebat, pressureLow}),
-                   "Hujan Lebat"});
+  // Rule untuk Berangin (weight: 0.7)
+  conditions.push_back({0.7 * min({windKencang, rainTidak}),
+                        "Berangin"});
 
-  rules.push_back({min({tempPanas, humKering, windTenang, rainTidak, pressureNormal, uvTinggi}),
-                   "Panas"});
-
-  rules.push_back({min({tempNormal, humNormal, windKencang, rainTidak, pressureLow}),
-                   "Berangin"});
-
-  rules.push_back({min({tempDingin, humLembab, windKencang, rainLebat, pressureLow}),
-                   "Badai"});
-
-  // Find rule with maximum strength
-  float maxStrength = 0;
+  // Remove all debug prints except final one
   String finalCondition = "Tidak Diketahui";
+  float maxCertainty = 0;
 
-  for (const Rule &rule : rules)
+  for (const auto &condition : conditions)
   {
-    if (rule.strength > maxStrength)
+    if (condition.first > maxCertainty)
     {
-      maxStrength = rule.strength;
-      finalCondition = rule.condition;
+      maxCertainty = condition.first;
+      finalCondition = condition.second;
     }
   }
 
-  // Debug print
-  Serial.println("\n--- Fuzzy Logic Debug ---");
-  Serial.printf("Temperature (%.1f°C): Dingin=%.2f, Normal=%.2f, Panas=%.2f\n",
-                temp, tempDingin, tempNormal, tempPanas);
-  Serial.printf("Humidity (%.1f%%): Kering=%.2f, Normal=%.2f, Lembab=%.2f\n",
-                hum, humKering, humNormal, humLembab);
-  Serial.printf("Wind Speed (%.1f km/h): Tenang=%.2f, Sedang=%.2f, Kencang=%.2f\n",
-                windSpeed, windTenang, windSedang, windKencang);
-  Serial.printf("Rainfall (%.1f mm): Tidak=%.2f, Ringan=%.2f, Sedang=%.2f, Lebat=%.2f\n",
-                rainfall, rainTidak, rainRingan, rainSedang, rainLebat);
-  Serial.printf("Pressure (%.1f hPa): Low=%.2f, Normal=%.2f, High=%.2f\n",
-                pressureHPa, pressureLow, pressureNormal, pressureHigh);
-  Serial.printf("UV Index (%.1f): Rendah=%.2f, Sedang=%.2f, Tinggi=%.2f\n",
-                uvIndex, uvRendah, uvSedang, uvTinggi);
+  // Replace the final debug print with this
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastFuzzyDebugTime >= FUZZY_DEBUG_INTERVAL)
+  {
+    Serial.printf("\n=== Weather Condition Result ===\nCondition: %s (Certainty: %.2f)\n",
+                  finalCondition.c_str(), maxCertainty);
+    lastFuzzyDebugTime = currentMillis;
+  }
 
-  return {finalCondition, maxStrength};
+  return {finalCondition, maxCertainty};
 }
 
 float min(std::initializer_list<float> values)
@@ -517,6 +509,158 @@ float min(std::initializer_list<float> values)
       minVal = val;
   }
   return minVal;
+}
+
+struct RainPrediction
+{
+  String intensity;
+  float certainty;
+};
+
+RainPrediction predictRain(float temp, float humidity, float pressure)
+{
+  static unsigned long lastDebugTime = 0;
+  static uint32_t callCount = 0;
+  unsigned long currentMillis = millis();
+  callCount++;
+
+  // Calculate memberships
+  float tempCold = (temp <= 11) ? 1 : (temp <= 21) ? (21 - temp) / 10
+                                                   : 0;
+  float tempWarm1 = (temp <= 20) ? 0 : (temp <= 21) ? (temp - 20)
+                                   : (temp <= 26)   ? 1
+                                   : (temp <= 27)   ? (27 - temp)
+                                                    : 0;
+  float tempWarm2 = calculateTriangularMembership(temp, 26, 27, 28);
+  float tempWarm3 = calculateTriangularMembership(temp, 27, 29, 31);
+  float tempHot = (temp <= 31) ? 0 : (temp <= 32) ? (temp - 31)
+                                 : (temp <= 40)   ? 1
+                                                  : 0;
+
+  float humDry = (humidity <= 30) ? 1 : (humidity <= 50) ? (50 - humidity) / 20
+                                                         : 0;
+  float humHumid1 = calculateTriangularMembership(humidity, 40, 55, 70);
+  float humHumid2 = calculateTriangularMembership(humidity, 70, 75, 80);
+  float humHumid3 = calculateTriangularMembership(humidity, 79, 84, 89);
+  float humWet = calculateTriangularMembership(humidity, 88, 94, 100);
+
+  float pressLow = (pressure <= 980) ? 1 : (pressure <= 1007) ? (1007 - pressure) / 27
+                                                              : 0;
+  float pressMedium = calculateTriangularMembership(pressure, 1006, 1007, 1008);
+  float pressHigh = (pressure <= 1008) ? 0 : (pressure <= 1010) ? (pressure - 1008) / 2
+                                         : (pressure <= 1014)   ? 1
+                                                                : 0;
+
+  std::vector<std::pair<float, String>> predictions;
+
+  // All 75 rules implementation
+  // Cold temperature (1-15)
+  predictions.push_back({min({tempCold, humDry, pressLow}), "No Rain"});
+  predictions.push_back({min({tempCold, humDry, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempCold, humDry, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempCold, humHumid1, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempCold, humHumid1, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempCold, humHumid1, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempCold, humHumid2, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempCold, humHumid2, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempCold, humHumid2, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempCold, humHumid3, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempCold, humHumid3, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempCold, humHumid3, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempCold, humWet, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempCold, humWet, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempCold, humWet, pressHigh}), "Moderate Rain"});
+
+  // Warm1 temperature (16-30)
+  predictions.push_back({min({tempWarm1, humDry, pressLow}), "No Rain"});
+  predictions.push_back({min({tempWarm1, humDry, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempWarm1, humDry, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm1, humHumid1, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempWarm1, humHumid1, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempWarm1, humHumid1, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm1, humHumid2, pressLow}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm1, humHumid2, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempWarm1, humHumid2, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempWarm1, humHumid3, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm1, humHumid3, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm1, humHumid3, pressHigh}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm1, humWet, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm1, humWet, pressMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm1, humWet, pressHigh}), "Moderate Rain"});
+
+  // Warm2 temperature (31-45)
+  predictions.push_back({min({tempWarm2, humDry, pressLow}), "No Rain"});
+  predictions.push_back({min({tempWarm2, humDry, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempWarm2, humDry, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm2, humHumid1, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempWarm2, humHumid1, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempWarm2, humHumid1, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm2, humHumid2, pressLow}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm2, humHumid2, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm2, humHumid2, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempWarm2, humHumid3, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm2, humHumid3, pressMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm2, humHumid3, pressHigh}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm2, humWet, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm2, humWet, pressMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm2, humWet, pressHigh}), "Moderate Rain"});
+
+  // Warm3 temperature (46-60)
+  predictions.push_back({min({tempWarm3, humDry, pressLow}), "No Rain"});
+  predictions.push_back({min({tempWarm3, humDry, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempWarm3, humDry, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm3, humHumid1, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempWarm3, humHumid1, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempWarm3, humHumid1, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempWarm3, humHumid2, pressLow}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm3, humHumid2, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempWarm3, humHumid2, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempWarm3, humHumid3, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm3, humHumid3, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm3, humHumid3, pressHigh}), "Moderate Rain"});
+  predictions.push_back({min({tempWarm3, humWet, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm3, humWet, pressMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempWarm3, humWet, pressHigh}), "Moderate Rain"});
+
+  // Hot temperature (61-75)
+  predictions.push_back({min({tempHot, humDry, pressLow}), "No Rain"});
+  predictions.push_back({min({tempHot, humDry, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempHot, humDry, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempHot, humHumid1, pressLow}), "Light Rain"});
+  predictions.push_back({min({tempHot, humHumid1, pressMedium}), "No Rain"});
+  predictions.push_back({min({tempHot, humHumid1, pressHigh}), "No Rain"});
+  predictions.push_back({min({tempHot, humHumid2, pressLow}), "Moderate Rain"});
+  predictions.push_back({min({tempHot, humHumid2, pressMedium}), "Light Rain"});
+  predictions.push_back({min({tempHot, humHumid2, pressHigh}), "Light Rain"});
+  predictions.push_back({min({tempHot, humHumid3, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempHot, humHumid3, pressMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempHot, humHumid3, pressHigh}), "Moderate Rain"});
+  predictions.push_back({min({tempHot, humWet, pressLow}), "Heavy Rain"});
+  predictions.push_back({min({tempHot, humWet, pressMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempHot, humWet, pressHigh}), "Moderate Rain"});
+
+  float maxCertainty = 0;
+  String finalPrediction = "Unknown";
+
+  for (const auto &pred : predictions)
+  {
+    if (pred.first > maxCertainty)
+    {
+      maxCertainty = pred.first;
+      finalPrediction = pred.second;
+    }
+  }
+
+  // Only print debug every 10 seconds
+  if (currentMillis - lastDebugTime >= DEBUG_INTERVAL)
+  {
+    Serial.printf("\n=== Rain Prediction (#%lu) ===\n", callCount);
+    Serial.printf("Result: %s (Certainty: %.2f)\n",
+                  finalPrediction.c_str(), maxCertainty);
+    lastDebugTime = currentMillis;
+  }
+
+  return {finalPrediction, maxCertainty};
 }
 
 void IRAM_ATTR rpm_anemometer()
@@ -636,6 +780,9 @@ void sendToRealtimeDB(float temp, float hum, float windSpeed, float rainfall, fl
   // Get weather condition using fuzzy logic
   WeatherCondition weather = fuzzyLogic(temp, hum, windSpeed, rainfall, pressure_hPa, uvIndex);
 
+  // Get rain prediction
+  RainPrediction rainPred = predictRain(temp, hum, pressure_hPa);
+
   // Modify the Firebase paths to include user and device hierarchy
   String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
   String latestPath = basePath + "/latest_reading";
@@ -652,6 +799,10 @@ void sendToRealtimeDB(float temp, float hum, float windSpeed, float rainfall, fl
   json.add("timestamp", fullTimestamp);
   json.add("weatherCondition", weather.condition);
   json.add("weatherCertainty", weather.certainty);
+
+  // Add rain prediction data
+  json.add("rainPrediction", rainPred.intensity);
+  json.add("rainPredictionCertainty", rainPred.certainty);
 
   // Send to latest_reading with new path
   if (Firebase.RTDB.setJSON(&fbdo, latestPath.c_str(), &json))
@@ -719,75 +870,79 @@ void TaskSendFirebase(void *pvParameters)
     {
       // Create JSON with current sensor data
       json.clear();
-      json.add("temperature", temperature);
-      json.add("humidity", humidity);
-      json.add("windSpeed_kmph", velocity_kmh);
-      json.add("rainfall_mm", rainfall);
-      json.add("pressure_hPa", pressure_hPa);
-      json.add("uvIndex", uvIndex);
-      json.add("altitude", altitude);
+    }
+    json.add("temperature", temperature);
+    json.add("humidity", humidity);
+    json.add("windSpeed_kmph", velocity_kmh);
+    json.add("rainfall_mm", rainfall);
+    json.add("pressure_hPa", pressure_hPa);
+    json.add("uvIndex", uvIndex);
+    json.add("altitude", altitude);
 
-      // Get current timestamp
-      char fullTimestamp[20];
-      struct tm timeinfo;
-      if (getLocalTime(&timeinfo))
-      {
-        strftime(fullTimestamp, sizeof(fullTimestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
-      }
-
-      json.add("timestamp", fullTimestamp);
-
-      // Get weather condition
-      WeatherCondition weather = fuzzyLogic(temperature, humidity, velocity_kmh, rainfall, pressure_hPa, uvIndex);
-      json.add("weatherCondition", weather.condition);
-      json.add("weatherCertainty", weather.certainty);
-
-      // Update latest reading more frequently
-      if (currentMillis - lastLatestUpdate >= FIREBASE_LATEST_INTERVAL)
-      {
-        String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
-        String latestPath = basePath + "/latest_reading";
-
-        if (Firebase.RTDB.setJSON(&fbdo, latestPath.c_str(), &json))
-        {
-          Serial.println("Latest reading update successful");
-        }
-        else
-        {
-          Serial.println("Latest reading update failed");
-          Serial.println(fbdo.errorReason());
-        }
-
-        lastLatestUpdate = currentMillis;
-      }
-
-      // Update history every minute
-      if (currentMillis - lastHistoryUpdate >= FIREBASE_HISTORY_INTERVAL)
-      {
-        String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
-        String formattedTime = String(fullTimestamp);
-        formattedTime.replace(" ", "_");
-        formattedTime.replace(":", "-");
-        String historyPath = basePath + "/history/" + formattedTime;
-
-        if (Firebase.RTDB.setJSON(&fbdo, historyPath.c_str(), &json))
-        {
-          Serial.println("History data saved successfully");
-        }
-        else
-        {
-          Serial.println("History data save failed");
-          Serial.println(fbdo.errorReason());
-        }
-
-        lastHistoryUpdate = currentMillis;
-      }
-
-      xSemaphoreGive(xMutex);
+    // Get current timestamp
+    char fullTimestamp[20];
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo))
+    {
+      strftime(fullTimestamp, sizeof(fullTimestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
     }
 
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
+    json.add("timestamp", fullTimestamp);
+
+    // Get weather condition and rain prediction
+    WeatherCondition weather = fuzzyLogic(temperature, humidity, velocity_kmh, rainfall, pressure_hPa, uvIndex);
+    RainPrediction rainPred = predictRain(temperature, humidity, pressure_hPa);
+
+    json.add("weatherCondition", weather.condition);
+    json.add("weatherCertainty", weather.certainty);
+    json.add("rainPrediction", rainPred.intensity);
+    json.add("rainPredictionCertainty", rainPred.certainty);
+
+    // Update latest reading more frequently
+    if (currentMillis - lastLatestUpdate >= FIREBASE_LATEST_INTERVAL)
+    {
+      String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
+      String latestPath = basePath + "/latest_reading";
+
+      if (Firebase.RTDB.setJSON(&fbdo, latestPath.c_str(), &json))
+      {
+        Serial.println("Latest reading update successful");
+      }
+      else
+      {
+        Serial.println("Latest reading update failed");
+        Serial.println(fbdo.errorReason());
+      }
+
+      lastLatestUpdate = currentMillis;
+    }
+
+    // Update history every minute
+    if (currentMillis - lastHistoryUpdate >= FIREBASE_HISTORY_INTERVAL)
+    {
+      String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
+      String formattedTime = String(fullTimestamp);
+      formattedTime.replace(" ", "_");
+      formattedTime.replace(":", "-");
+      String historyPath = basePath + "/history/" + formattedTime;
+
+      if (Firebase.RTDB.setJSON(&fbdo, historyPath.c_str(), &json))
+      {
+        Serial.println("History data saved successfully");
+      }
+      else
+      {
+        Serial.println("History data save failed");
+        Serial.println(fbdo.errorReason());
+      }
+
+      lastHistoryUpdate = currentMillis;
+    }
+
+    xSemaphoreGive(xMutex);
   }
+
+  vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
 }
 
 void TaskUpdateDisplay(void *pvParameters)
