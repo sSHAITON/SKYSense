@@ -120,8 +120,8 @@ void readBMPSensor();
 void TaskReadBMP(void *pvParameters);
 
 // Add user id and device id
-#define USER_ID "2"
-#define DEVICE_ID "2A"
+#define USER_ID "1"
+#define DEVICE_ID "1B"
 
 // Add near top with other defines
 #define FIREBASE_UPDATE_INTERVAL 60000  // 1 minute in milliseconds
@@ -130,13 +130,6 @@ void TaskReadBMP(void *pvParameters);
 
 // Add this near the top with other defines
 #define DEBUG_INTERVAL 10000 // Increase debug interval to 10 seconds
-
-// Add near the top with other defines
-#define DEVICE_STATUS_INTERVAL 30000 // Update device status every 30 seconds
-
-// Add these with other global variables
-unsigned long lastStatusUpdate = 0;
-bool deviceConnected = false;
 
 // Add these with other global variables
 unsigned long lastFuzzyDebugTime = 0;
@@ -253,8 +246,6 @@ void setup()
     delay(1000);
   }
   Serial.println("\nTime synchronized with NTP!");
-
-  deviceStartTime = millis(); // Record start time
 }
 
 // Fungsi untuk mendapatkan timestamp yang diformat
@@ -447,7 +438,7 @@ WeatherCondition fuzzyLogic(float temp, float hum, float windSpeed, float rainfa
   float humLembab = (hum <= 50) ? 0 : (hum <= 70) ? (hum - 50) / 20
                                                   : 1;
 
-  // Wind Speed membership functions (km/h) - Made more lenient
+  // Wind Speed membership functions (km/h)
   float windTenang = (windSpeed <= 5) ? 1 : (windSpeed <= 15) ? (15 - windSpeed) / 10
                                                               : 0;
   float windSedang = (windSpeed <= 5) ? 0 : (windSpeed <= 15) ? (windSpeed - 5) / 10
@@ -456,22 +447,67 @@ WeatherCondition fuzzyLogic(float temp, float hum, float windSpeed, float rainfa
   float windKencang = (windSpeed <= 15) ? 0 : (windSpeed <= 25) ? (windSpeed - 15) / 10
                                                                 : 1;
 
-  // Rules evaluation with default fallback
+  // UV Index membership functions
+  float uvLow = (uvIndex <= 2) ? 1 : (uvIndex <= 5) ? (5 - uvIndex) / 3
+                                                    : 0;
+  float uvModerate = (uvIndex <= 2) ? 0 : (uvIndex <= 5) ? (uvIndex - 2) / 3
+                                      : (uvIndex <= 7)   ? (7 - uvIndex) / 2
+                                                         : 0;
+  float uvHigh = (uvIndex <= 5) ? 0 : (uvIndex <= 7) ? (uvIndex - 5) / 2
+                                  : (uvIndex <= 10)  ? 1
+                                                     : 0;
+
   std::vector<std::pair<float, String>> conditions;
 
-  // Basic condition rules with more lenient thresholds
-  conditions.push_back({min({tempNormal, humNormal}), "Clear"});
-  conditions.push_back({min({tempNormal, humLembab}), "Cloudy"});
-  conditions.push_back({min({humLembab, windTenang}), "Cloudy"});
-  conditions.push_back({min({tempPanas, humKering}), "Hot"});
-  conditions.push_back({min({humLembab, windKencang}), "Windy"});
-
-  // Rain condition rules
+  // First check for rain conditions (highest priority)
   if (rainfall > 0)
   {
-    conditions.push_back({min({humLembab, rainfall > 0 ? 1.0f : 0.0f}), "Light Rain"});
-    conditions.push_back({min({humLembab, rainfall > 2 ? 1.0f : 0.0f}), "Moderate Rain"});
-    conditions.push_back({min({humLembab, rainfall > 5 ? 1.0f : 0.0f}), "Heavy Rain"});
+    if (rainfall <= 2.5)
+    {
+      conditions.push_back({min({humLembab, 1.0f}), "Light Rain"});
+    }
+    else if (rainfall <= 7.5)
+    {
+      conditions.push_back({min({humLembab, 1.0f}), "Moderate Rain"});
+    }
+    else
+    {
+      conditions.push_back({min({humLembab, 1.0f}), "Heavy Rain"});
+    }
+  }
+  else
+  {
+    // Clear weather conditions based on UV and temperature
+    if (uvHigh > 0 && tempPanas > 0)
+    {
+      conditions.push_back({min({uvHigh, tempPanas}), "Hot and Sunny"});
+    }
+    else if (uvModerate > 0 && tempNormal > 0)
+    {
+      conditions.push_back({min({uvModerate, tempNormal}), "Sunny"});
+    }
+    else if (uvLow > 0)
+    {
+      conditions.push_back({min({uvLow, tempNormal}), "Clear"});
+    }
+
+    // Cloudy conditions
+    if (humLembab > 0.6)
+    {
+      conditions.push_back({humLembab, "Cloudy"});
+    }
+
+    // Wind conditions
+    if (windKencang > 0.7)
+    {
+      conditions.push_back({windKencang, "Windy"});
+    }
+
+    // Hot conditions
+    if (tempPanas > 0.8 && humKering > 0.6)
+    {
+      conditions.push_back({min({tempPanas, humKering}), "Hot"});
+    }
   }
 
   // Default condition with low certainty if no other conditions are met
@@ -486,21 +522,6 @@ WeatherCondition fuzzyLogic(float temp, float hum, float windSpeed, float rainfa
     {
       maxCertainty = condition.first;
       finalCondition = condition.second;
-    }
-  }
-
-  // If certainty is too low but we have clear indicators, use them
-  if (maxCertainty < 0.1)
-  {
-    if (temp > 30)
-    {
-      finalCondition = "Hot";
-      maxCertainty = 0.3;
-    }
-    else if (hum > 70)
-    {
-      finalCondition = "Cloudy";
-      maxCertainty = 0.3;
     }
   }
 
@@ -864,34 +885,6 @@ void TaskReadSensors(void *pvParameters)
   }
 }
 
-void updateDeviceStatus()
-{
-  if (!Firebase.ready() || !signupOK)
-    return;
-
-  String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID + "/device_status";
-  FirebaseJson statusJson;
-
-  // Update connection status
-  deviceConnected = (WiFi.status() == WL_CONNECTED && Firebase.ready());
-
-  // Prepare status data
-  statusJson.clear();
-  statusJson.add("connected", deviceConnected);
-  statusJson.add("last_seen", getFormattedTime());
-
-  // Send to Firebase
-  if (Firebase.RTDB.setJSON(&fbdo, basePath.c_str(), &statusJson))
-  {
-    Serial.println("Device status updated successfully");
-  }
-  else
-  {
-    Serial.println("Device status update failed");
-    Serial.println(fbdo.errorReason());
-  }
-}
-
 void TaskSendFirebase(void *pvParameters)
 {
   unsigned long lastHistoryUpdate = 0;
@@ -972,13 +965,6 @@ void TaskSendFirebase(void *pvParameters)
       }
 
       lastHistoryUpdate = currentMillis;
-    }
-
-    // Update device status
-    if (currentMillis - lastStatusUpdate >= DEVICE_STATUS_INTERVAL)
-    {
-      updateDeviceStatus();
-      lastStatusUpdate = currentMillis;
     }
 
     xSemaphoreGive(xMutex);
