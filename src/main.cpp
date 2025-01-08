@@ -329,9 +329,9 @@ void updateDisplay(int slide)
     display.setCursor(2, 20);
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.println("Wind Speed (km/h):");
+    display.println("Wind Speed (m/s):"); // Changed from km/h to m/s
     display.setTextSize(2);
-    display.println(velocity_kmh, 1);
+    display.println(velocity_ms, 1); // Changed from velocity_kmh to velocity_ms
     break;
   case 3:
     display.setCursor(2, 20);
@@ -541,154 +541,123 @@ float min(std::initializer_list<float> values)
 
 struct RainPrediction
 {
-  String intensity;
+  String prediction;
   float certainty;
+  float crispValue;
 };
 
-RainPrediction predictRain(float temp, float humidity, float pressure)
+float calculateRainfallMembership(float x, const String &type)
 {
-  static unsigned long lastDebugTime = 0;
-  static uint32_t callCount = 0;
-  unsigned long currentMillis = millis();
-  callCount++;
+  if (type == "No Rain")
+  {
+    return calculateTrapezoidalMembership(x, 0, 0, 0, 1.9);
+  }
+  else if (type == "Light Rain")
+  {
+    return calculateTriangularMembership(x, 0, 1.9, 10.1);
+  }
+  else if (type == "Moderate Rain")
+  {
+    return calculateTriangularMembership(x, 1.9, 10.1, 126.6);
+  }
+  else if (type == "Heavy Rain")
+  {
+    return calculateTrapezoidalMembership(x, 10.1, 126.6, 126.6, 126.6);
+  }
+  return 0;
+}
 
-  // Calculate memberships
-  float tempCold = (temp <= 11) ? 1 : (temp <= 21) ? (21 - temp) / 10
-                                                   : 0;
-  float tempWarm1 = (temp <= 20) ? 0 : (temp <= 21) ? (temp - 20)
-                                   : (temp <= 26)   ? 1
-                                   : (temp <= 27)   ? (27 - temp)
-                                                    : 0;
-  float tempWarm2 = calculateTriangularMembership(temp, 26, 27, 28);
-  float tempWarm3 = calculateTriangularMembership(temp, 27, 29, 31);
-  float tempHot = (temp <= 31) ? 0 : (temp <= 32) ? (temp - 31)
-                                 : (temp <= 40)   ? 1
-                                                  : 0;
+RainPrediction predictRain(float temp, float hum, float windSpeed)
+{
+  float tempPoor = calculateTrapezoidalMembership(temp, 20.8, 20.8, 23.2, 23.8);
+  float tempLow = calculateTriangularMembership(temp, 23.2, 23.8, 24.5);
+  float tempMedium = calculateTriangularMembership(temp, 23.8, 24.5, 28.9);
+  float tempHigh = calculateTrapezoidalMembership(temp, 24.5, 28.9, 28.9, 28.9);
 
-  float humDry = (humidity <= 30) ? 1 : (humidity <= 50) ? (50 - humidity) / 20
-                                                         : 0;
-  float humHumid1 = calculateTriangularMembership(humidity, 40, 55, 70);
-  float humHumid2 = calculateTriangularMembership(humidity, 70, 75, 80);
-  float humHumid3 = calculateTriangularMembership(humidity, 79, 84, 89);
-  float humWet = calculateTriangularMembership(humidity, 88, 94, 100);
+  float humPoor = calculateTrapezoidalMembership(hum, 46, 46, 74, 79);
+  float humLow = calculateTriangularMembership(hum, 74, 79, 83);
+  float humMedium = calculateTriangularMembership(hum, 79, 83, 94);
+  float humHigh = calculateTrapezoidalMembership(hum, 83, 94, 94, 100);
 
-  float pressLow = (pressure <= 980) ? 1 : (pressure <= 1007) ? (1007 - pressure) / 27
-                                                              : 0;
-  float pressMedium = calculateTriangularMembership(pressure, 1006, 1007, 1008);
-  float pressHigh = (pressure <= 1008) ? 0 : (pressure <= 1010) ? (pressure - 1008) / 2
-                                         : (pressure <= 1014)   ? 1
-                                                                : 0;
+  float windPoor = calculateTrapezoidalMembership(windSpeed, 0, 0, 1, 1);
+  float windLow = calculateTriangularMembership(windSpeed, 1, 1, 2);
+  float windMedium = calculateTriangularMembership(windSpeed, 1, 2, 5);
+  float windHigh = calculateTrapezoidalMembership(windSpeed, 2, 5, 5, 6);
 
   std::vector<std::pair<float, String>> predictions;
 
-  // All 75 rules implementation
-  // Cold temperature (1-15)
-  predictions.push_back({min({tempCold, humDry, pressLow}), "No Rain"});
-  predictions.push_back({min({tempCold, humDry, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempCold, humDry, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempCold, humHumid1, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempCold, humHumid1, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempCold, humHumid1, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempCold, humHumid2, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempCold, humHumid2, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempCold, humHumid2, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempCold, humHumid3, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempCold, humHumid3, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempCold, humHumid3, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempCold, humWet, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempCold, humWet, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempCold, humWet, pressHigh}), "Moderate Rain"});
+  predictions.push_back({min({tempLow, humHigh, windHigh}), "Heavy Rain"});
+  predictions.push_back({min({tempLow, humHigh, windMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempMedium, humHigh, windMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempPoor, humMedium, windMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempPoor, humLow, windMedium}), "Light Rain"});
+  predictions.push_back({min({tempLow, humMedium, windLow}), "Light Rain"});
+  predictions.push_back({min({tempMedium, humMedium, windLow}), "No Rain"});
+  predictions.push_back({min({tempHigh, humHigh, windPoor}), "No Rain"});
+  predictions.push_back({min({tempLow, humPoor, windLow}), "No Rain"});
+  predictions.push_back({min({tempLow, humPoor, windMedium}), "No Rain"});
+  predictions.push_back({min({tempLow, humLow, windMedium}), "Light Rain"});
+  predictions.push_back({min({tempMedium, humPoor, windLow}), "No Rain"});
+  predictions.push_back({min({tempMedium, humLow, windLow}), "No Rain"});
+  predictions.push_back({min({tempMedium, humLow, windMedium}), "Light Rain"});
+  predictions.push_back({min({tempMedium, humMedium, windMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempHigh, humPoor, windLow}), "No Rain"});
+  predictions.push_back({min({tempHigh, humLow, windLow}), "No Rain"});
+  predictions.push_back({min({tempHigh, humLow, windMedium}), "Light Rain"});
+  predictions.push_back({min({tempHigh, humMedium, windMedium}), "Moderate Rain"});
+  predictions.push_back({min({tempHigh, humHigh, windMedium}), "Heavy Rain"});
+  predictions.push_back({min({tempPoor, humHigh, windPoor}), "Light Rain"});
+  predictions.push_back({min({tempLow, humHigh, windPoor}), "Moderate Rain"});
+  predictions.push_back({min({tempHigh, humHigh, windPoor}), "Moderate Rain"});
+  predictions.push_back({min({tempPoor, humMedium, windPoor}), "No Rain"});
+  predictions.push_back({min({tempLow, humMedium, windPoor}), "Light Rain"});
+  predictions.push_back({min({tempHigh, humMedium, windPoor}), "Light Rain"});
+  predictions.push_back({min({tempPoor, humLow, windPoor}), "No Rain"});
+  predictions.push_back({min({tempLow, humLow, windPoor}), "No Rain"});
+  predictions.push_back({min({tempHigh, humLow, windPoor}), "No Rain"});
 
-  // Warm1 temperature (16-30)
-  predictions.push_back({min({tempWarm1, humDry, pressLow}), "No Rain"});
-  predictions.push_back({min({tempWarm1, humDry, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempWarm1, humDry, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm1, humHumid1, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempWarm1, humHumid1, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempWarm1, humHumid1, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm1, humHumid2, pressLow}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm1, humHumid2, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempWarm1, humHumid2, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempWarm1, humHumid3, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm1, humHumid3, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm1, humHumid3, pressHigh}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm1, humWet, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm1, humWet, pressMedium}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm1, humWet, pressHigh}), "Moderate Rain"});
+  // Centroid defuzzification
+  const int numPoints = 1000;
+  const float rainfallMin = 0;
+  const float rainfallMax = 160;
+  float step = (rainfallMax - rainfallMin) / numPoints;
 
-  // Warm2 temperature (31-45)
-  predictions.push_back({min({tempWarm2, humDry, pressLow}), "No Rain"});
-  predictions.push_back({min({tempWarm2, humDry, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempWarm2, humDry, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm2, humHumid1, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempWarm2, humHumid1, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempWarm2, humHumid1, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm2, humHumid2, pressLow}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm2, humHumid2, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm2, humHumid2, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempWarm2, humHumid3, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm2, humHumid3, pressMedium}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm2, humHumid3, pressHigh}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm2, humWet, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm2, humWet, pressMedium}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm2, humWet, pressHigh}), "Moderate Rain"});
+  float numerator = 0;
+  float denominator = 0;
 
-  // Warm3 temperature (46-60)
-  predictions.push_back({min({tempWarm3, humDry, pressLow}), "No Rain"});
-  predictions.push_back({min({tempWarm3, humDry, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempWarm3, humDry, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm3, humHumid1, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempWarm3, humHumid1, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempWarm3, humHumid1, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempWarm3, humHumid2, pressLow}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm3, humHumid2, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempWarm3, humHumid2, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempWarm3, humHumid3, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm3, humHumid3, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm3, humHumid3, pressHigh}), "Moderate Rain"});
-  predictions.push_back({min({tempWarm3, humWet, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm3, humWet, pressMedium}), "Heavy Rain"});
-  predictions.push_back({min({tempWarm3, humWet, pressHigh}), "Moderate Rain"});
-
-  // Hot temperature (61-75)
-  predictions.push_back({min({tempHot, humDry, pressLow}), "No Rain"});
-  predictions.push_back({min({tempHot, humDry, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempHot, humDry, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempHot, humHumid1, pressLow}), "Light Rain"});
-  predictions.push_back({min({tempHot, humHumid1, pressMedium}), "No Rain"});
-  predictions.push_back({min({tempHot, humHumid1, pressHigh}), "No Rain"});
-  predictions.push_back({min({tempHot, humHumid2, pressLow}), "Moderate Rain"});
-  predictions.push_back({min({tempHot, humHumid2, pressMedium}), "Light Rain"});
-  predictions.push_back({min({tempHot, humHumid2, pressHigh}), "Light Rain"});
-  predictions.push_back({min({tempHot, humHumid3, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempHot, humHumid3, pressMedium}), "Moderate Rain"});
-  predictions.push_back({min({tempHot, humHumid3, pressHigh}), "Moderate Rain"});
-  predictions.push_back({min({tempHot, humWet, pressLow}), "Heavy Rain"});
-  predictions.push_back({min({tempHot, humWet, pressMedium}), "Heavy Rain"});
-  predictions.push_back({min({tempHot, humWet, pressHigh}), "Moderate Rain"});
-
-  float maxCertainty = 0;
-  String finalPrediction = "Unknown";
-
-  for (const auto &pred : predictions)
+  for (float x = rainfallMin; x <= rainfallMax; x += step)
   {
-    if (pred.first > maxCertainty)
+    float maxMembership = 0;
+
+    for (const auto &pred : predictions)
     {
-      maxCertainty = pred.first;
-      finalPrediction = pred.second;
+      float ruleMembership = min(pred.first,
+                                 calculateRainfallMembership(x, pred.second));
+      maxMembership = max(maxMembership, ruleMembership);
+    }
+
+    numerator += x * maxMembership * step;
+    denominator += maxMembership * step;
+  }
+
+  float crispValue = (denominator != 0) ? numerator / denominator : 0;
+
+  // Find the linguistic term with highest membership at crisp value
+  float maxCertainty = 0;
+  String finalPrediction = "No Rain";
+  std::vector<String> terms = {"No Rain", "Light Rain", "Moderate Rain", "Heavy Rain"};
+
+  for (const auto &term : terms)
+  {
+    float membership = calculateRainfallMembership(crispValue, term);
+    if (membership > maxCertainty)
+    {
+      maxCertainty = membership;
+      finalPrediction = term;
     }
   }
 
-  // Only print debug every 10 seconds
-  if (currentMillis - lastDebugTime >= DEBUG_INTERVAL)
-  {
-    Serial.printf("\n=== Rain Prediction (#%lu) ===\n", callCount);
-    Serial.printf("Result: %s (Certainty: %.2f)\n",
-                  finalPrediction.c_str(), maxCertainty);
-    lastDebugTime = currentMillis;
-  }
-
-  return {finalPrediction, maxCertainty};
+  return {finalPrediction, maxCertainty, crispValue};
 }
 
 void IRAM_ATTR rpm_anemometer()
@@ -731,7 +700,7 @@ void processRainfall()
     {
       rainTipCount += tipCount;
       rainfall = rainTipCount * MILLIMETERS_PER_TIP;
-      lastRainTime = millis(); // Update last rain time
+      lastRainTime = millis();
       xSemaphoreGive(xMutex);
     }
   }
@@ -809,7 +778,7 @@ void sendToRealtimeDB(float temp, float hum, float windSpeed, float rainfall, fl
   WeatherCondition weather = fuzzyLogic(temp, hum, windSpeed, rainfall, pressure_hPa, uvIndex);
 
   // Get rain prediction
-  RainPrediction rainPred = predictRain(temp, hum, pressure_hPa);
+  RainPrediction rainPred = predictRain(temp, hum, windSpeed);
 
   // Modify the Firebase paths to include user and device hierarchy
   String basePath = String("uid=") + USER_ID + "/deviceid=" + DEVICE_ID;
@@ -819,17 +788,15 @@ void sendToRealtimeDB(float temp, float hum, float windSpeed, float rainfall, fl
   // Add sensor data
   json.add("temperature", temp);
   json.add("humidity", hum);
-  json.add("windSpeed_kmph", windSpeed);
-  json.add("rainfall_mm", rainfall);
+  json.add("windSpeed_ms", windSpeed);
   json.add("pressure_hPa", pressure_hPa);
   json.add("uvIndex", uvIndex);
-  json.add("altitude", altitude); // Add altitude to JSON
+  json.add("altitude", altitude);
   json.add("timestamp", fullTimestamp);
   json.add("weatherCondition", weather.condition);
   json.add("weatherCertainty", weather.certainty);
 
-  // Add rain prediction data
-  json.add("rainPrediction", rainPred.intensity);
+  json.add("rainPrediction", rainPred.prediction);
   json.add("rainPredictionCertainty", rainPred.certainty);
 
   // Send to latest_reading with new path
@@ -877,8 +844,8 @@ void TaskReadSensors(void *pvParameters)
 
     ESP_LOGI(TAG, "Temperature (DHT): %.2f °C", temperature);
     ESP_LOGI(TAG, "Humidity (DHT): %.2f %%", humidity);
-    ESP_LOGV(TAG, "Wind Speed: %.2f km/h", velocity_kmh);
-    ESP_LOGV(TAG, "Wind Speed: %.2f m/s", velocity_ms);
+    ESP_LOGV(TAG, "Wind Speed: %.2f m/s", velocity_ms);   // Changed order to show m/s first
+    ESP_LOGV(TAG, "Wind Speed: %.2f km/h", velocity_kmh); // Kept for reference
     ESP_LOGW(TAG, "Rainfall: %.2f mm", rainfall);
     ESP_LOGI(TAG, "Pressure (BMP): %.2f hPa", pressure_hPa); // Log pressure in hPa
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -901,7 +868,7 @@ void TaskSendFirebase(void *pvParameters)
     }
     json.add("temperature", temperature);
     json.add("humidity", humidity);
-    json.add("windSpeed_kmph", velocity_kmh);
+    json.add("windSpeed_ms", velocity_ms); // Changed from velocity_kmh to velocity_ms
     json.add("rainfall_mm", rainfall);
     json.add("pressure_hPa", pressure_hPa);
     json.add("uvIndex", uvIndex);
@@ -918,12 +885,12 @@ void TaskSendFirebase(void *pvParameters)
     json.add("timestamp", fullTimestamp);
 
     // Get weather condition and rain prediction
-    WeatherCondition weather = fuzzyLogic(temperature, humidity, velocity_kmh, rainfall, pressure_hPa, uvIndex);
-    RainPrediction rainPred = predictRain(temperature, humidity, pressure_hPa);
+    WeatherCondition weather = fuzzyLogic(temperature, humidity, velocity_ms, rainfall, pressure_hPa, uvIndex);
+    RainPrediction rainPred = predictRain(temperature, humidity, velocity_ms);
 
     json.add("weatherCondition", weather.condition);
     json.add("weatherCertainty", weather.certainty);
-    json.add("rainPrediction", rainPred.intensity);
+    json.add("rainPrediction", rainPred.prediction);
     json.add("rainPredictionCertainty", rainPred.certainty);
 
     // Update latest reading more frequently
